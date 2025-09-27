@@ -1,0 +1,148 @@
+version: "3.9"
+
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.8
+    restart: unless-stopped
+    environment:
+      MEILI_ENV: production
+    volumes:
+      - data-meili:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [ragnet]
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.2
+    restart: unless-stopped
+    volumes:
+      - data-qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [ragnet]
+
+  emb:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.5
+    restart: unless-stopped
+    environment:
+      MODEL_ID: BAAI/bge-m3
+      BATCH_SIZE: "128"
+      MAX_BATCH_TOKENS: "8192"
+      TEI_MODEL: embedding
+    volumes:
+      - models-cache:/data
+    device_requests:
+      - driver: nvidia
+        count: 1
+        capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [ragnet]
+
+  rerank:
+    build: ./services/rerank
+    restart: unless-stopped
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+    device_requests:
+      - driver: nvidia
+        count: 1
+        capabilities: [gpu]
+    depends_on:
+      emb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [ragnet]
+
+  indexer:
+    build: ./services/indexer
+    restart: unless-stopped
+    environment:
+      CONFIG_PATH: /config/config.yaml
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./secrets:/secrets:ro
+      - repos-data:/data/repos
+      - blobs-data:/data/blobs
+      - state-data:/data/state
+    depends_on:
+      meilisearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      emb:
+        condition: service_healthy
+      rerank:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [ragnet]
+
+  poller:
+    build: ./services/poller
+    restart: unless-stopped
+    environment:
+      CONFIG_PATH: /config/config.yaml
+      INDEXER_URL: http://indexer:8000
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./secrets:/secrets:ro
+      - repos-data:/data/repos
+    depends_on:
+      indexer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "services/poller/main.py"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    networks: [ragnet]
+
+  mcp-rag:
+    build: ./services/mcp_rag
+    restart: unless-stopped
+    environment:
+      CONFIG_PATH: /config/config.yaml
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - blobs-data:/data/blobs
+      - repos-data:/data/repos
+    depends_on:
+      indexer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "8765:8765"
+    networks: [ragnet]
+
+volumes:
+  repos-data:
+  blobs-data:
+  state-data:
+  models-cache:
+  data-meili:
+  data-qdrant:
+
+networks:
+  ragnet:
+    driver: bridge

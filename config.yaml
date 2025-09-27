@@ -1,0 +1,41 @@
+gitlab:
+  url: ssh://git@gitlab.int.bachatka.ru
+  deploy_key_path: /secrets/gitlab_readonly_key
+  poll_interval_sec: 30
+
+projects:
+  - repo: bachatka/backend
+    branches: [main, develop]
+    denylist:
+      - "secrets/**"
+      - "infra/keys/**"
+      - "**/*.pem"
+      - "**/*.key"
+  - repo: bachatka/frontend
+    branches: [main]
+    denylist:
+      - "secrets/**"
+
+chunking:
+  max_chars: 1800
+  overlap: 200
+
+services:
+  meilisearch_url: http://meilisearch:7700
+  qdrant_url: http://qdrant:6333
+  tei_url: http://emb:8080
+  rerank_url: http://rerank:8081
+  blob_root: /data/blobs
+  repo_root: /data/repos
+  state_path: /data/state/indexer-state.json
+
+mcp:
+  host: 0.0.0.0
+  port: 8765
+  enforce_meta_tool: true
+  server_description: "Git is the only source of truth. Always call MCP tools before answering."
+  classification_enabled: true
+
+limits:
+  http_timeout_sec: 10
+  max_parallel_index_tasks: 4
